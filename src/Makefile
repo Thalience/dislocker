@@ -1,27 +1,30 @@
 PROGNAME	=	dislocker
 AUTHOR		=	\"Romain Coltel\"
 VERSION		=	0.3.1
-ARCH		=	$(shell uname)
+ARCH		=	$(shell uname -m)
+OS		=	$(shell uname -s)
 DATE		=	$(shell date +%Y-%m-%d)
 
 # DEBUG		=	1
 
+ifeq ($(OS), FreeBSD)
+MAKE		=	gmake
+else
+MAKE		=	make
+endif
 
-# Choose between one of them (done automatically by using `make fuse' or `make file')
-__RUN_FUSE	=	0
-__RUN_FILE	=	0
-# NOTE: __RUN_FILE can be a veeeeeeeery long process to complete
 
-
-CC		=	gcc
+CC		=	cc
 DEFINES		=	-DPROGNAME=\"$(PROGNAME)\" -DVERSION=\"$(VERSION)\" -D_FILE_OFFSET_BITS=64
-INC		=	-I/usr/include -I.
+DEFINES		+=	-DAUTHOR="$(AUTHOR)" -D__OS=\"$(OS)\" -D__ARCH=\"$(ARCH)\"
+DEFINES		+=	-D__ARCH_$(shell echo $(ARCH) | tr a-z A-Z) -D__$(shell echo $(OS) | tr a-z A-Z)
+INC		=	-I. -I/usr/local/include
 WFLAGS		=	-Wall -Werror -Wextra
-CFLAGS		=	$(WFLAGS) $(DEFINES) $(INC) $(LIB)
+CFLAGS		=	$(WFLAGS) $(DEFINES) $(INC)
 SOURCES		=	dislocker.c common.c sectors.c \
 			config.c xstd/xstdio.c xstd/xstdlib.c
 OBJECTS		=	$(SOURCES:.c=.o)
-LDFLAGS		=	-lpthread -lpolarssl
+LDFLAGS		=	$(LIB) -lpthread -lpolarssl
 BIN		=	$(PROGNAME)
 
 EXT_OBJ		=	metadata/datums.o metadata/metadata.o metadata/vmk.o metadata/fvek.o metadata/extended_info.o \
@@ -41,23 +44,16 @@ FUSE_ROOT	=	outputs/fuse/fuse
 FILE_ROOT	=	outputs/file/file
 
 
-# Get the system architecture
-ifeq ($(shell uname -m), x86_64)
-CFLAGS		+=	-D__ARCH_X86_64
-endif
-
 
 # For MacOSX users
-ifeq ($(shell uname -s), Darwin)
-DEFINES		+=	-D__DARWIN
-else
+ifneq ($(OS), Darwin)
 # Useless warnings when used within Darwin
 WFLAGS		+=	-Wconversion
 endif
 
-
-
-
+ifeq ($(OS), FreeBSD)
+LIB		+=	-L/usr/local/lib
+endif
 
 ifdef DEBUG
 DBGFLAGS	=	-ggdb -D DEBUG=$(DEBUG)
@@ -66,7 +62,7 @@ endif
 
 
 
-
+export
 
 .PHONY : all libs static $(BIN) file fuse common clean
 
@@ -76,10 +72,10 @@ endif
 all : fuse
 
 libs: $(OBJECTS)
-	@make DEBUG=$(DEBUG) -C accesses/   library
-	@make DEBUG=$(DEBUG) -C metadata/   library
-	@make DEBUG=$(DEBUG) -C ntfs/       library
-	@make DEBUG=$(DEBUG) -C encryption/ library
+	@$(MAKE) DEBUG=$(DEBUG) -C accesses/   library
+	@$(MAKE) DEBUG=$(DEBUG) -C metadata/   library
+	@$(MAKE) DEBUG=$(DEBUG) -C ntfs/       library
+	@$(MAKE) DEBUG=$(DEBUG) -C encryption/ library
 
 
 # Default rules for final binaries
@@ -90,7 +86,7 @@ $(BIN) : touch libs
 	$(CC) $(CFLAGS) -o $@ $(OBJECTS) $(EXT_OBJ) $(LDFLAGS)
 
 
-static : libs
+static : touch libs
 	$(CC) -static  $(CFLAGS) -o $(BIN)-static $(OBJECTS) $(EXT_OBJ) $(LDFLAGS) -lz -ldl
 
 
@@ -107,7 +103,7 @@ fuse: CFLAGS  += -D__RUN_FUSE -DFUSE_USE_VERSION=26
 fuse: SOURCES += $(FUSE_ROOT).c
 
 # Don't link with the same library on MacOSX
-ifeq ($(shell uname -s), Darwin)
+ifeq ($(OS), Darwin)
 fuse: LDFLAGS += -losxfuse_i64
 else
 fuse: LDFLAGS += -lfuse
@@ -120,18 +116,20 @@ fuse: $(BIN)
 
 # Check if the installed binary is present, make it if it isn't
 check-install :
-	[ -e $(BIN) ] && echo "Found $(BIN) binary" || make clean fuse
-	@# But if it fails, exit, there's no other choice I think :/
-	[ -e $(BIN) ] || exit 42
+	@[ -e $(BIN) ] && echo "Found $(BIN) binary, installing it" || make clean fuse
 
 # Classic rules
-common : common.o xstd/xstdio.o xstd/xstdlib.o metadata/datums.o
-	@make -C ntfs/
+common : common.o xstd/xstdio.o xstd/xstdlib.o metadata/datums.o metadata/extended_info.o
+	@$(MAKE) -C ntfs/
 
 install: check-install
 	cp $(BIN) $(INSTALL_PATH)
 	chmod 755 $(INSTALL_PATH)$(BIN)
-	cp $(MAN_ROOT)$(BIN)_man $(MAN_ROOT)$(BIN).$(MAN_NUMBER)
+	if [ "$(OS)" = "Darwin" ]; then                                       \
+		cp $(MAN_ROOT)$(BIN)_osx_man $(MAN_ROOT)$(BIN).$(MAN_NUMBER); \
+	else                                                                  \
+		cp $(MAN_ROOT)$(BIN)_man $(MAN_ROOT)$(BIN).$(MAN_NUMBER);     \
+	fi
 	gzip $(MAN_ROOT)$(BIN).$(MAN_NUMBER)
 	mv $(MAN_ROOT)$(BIN).$(MAN_NUMBER).gz $(MAN_PATH)
 	@echo "==========================================================="
@@ -139,8 +137,8 @@ install: check-install
 	@echo "See 'man 1 $(BIN)' for details on how to use it"
 
 uninstall: clean
-	[ -f $(INSTALL_PATH)$(BIN) ]              && rm $(INSTALL_PATH)$(BIN)              || echo -n ""
-	[ -f $(MAN_PATH)$(BIN).$(MAN_NUMBER).gz ] && rm $(MAN_PATH)$(BIN).$(MAN_NUMBER).gz || echo -n ""
+	[ -f $(INSTALL_PATH)$(BIN) ]              && rm $(INSTALL_PATH)$(BIN)
+	[ -f $(MAN_PATH)$(BIN).$(MAN_NUMBER).gz ] && rm $(MAN_PATH)$(BIN).$(MAN_NUMBER).gz
 	@echo "==========================================================="
 	@echo "$(BIN) uninstalled"
 
